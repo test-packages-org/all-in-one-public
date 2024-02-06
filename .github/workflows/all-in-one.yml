@@ -1,0 +1,1243 @@
+# .github/workflows/all-in-one.yml
+#
+# Please note that this was created this way make it as portable as possible this meant a few thing
+# 1. Contract our of a single file, making it easy to drop into any environment
+# 2. Not using any but the most basic of dependencies (aka not using s4u/setup-maven-action)
+# 3. Don't make global changes to to the runners.
+#
+# So no, I'm not suggesting it 1k+ lines of yml makes for a good editing experience.
+# 
+# To use you will needed
+# 1. A github instance, any instance should do, dotcom, GHES, bp-dev, gheboot, or codespace should do
+# 2. Create a repo in that instance (it can be owned by a user or org)
+# 3. Access to runner (hosted or self-hosted)
+# 4. Some of the actions with in the github.com/actions org (these are normally there, but you will need to run `bin/seed actions_repos` in your codespace to get them)
+# 
+# To use it
+# 0. If you are on codespaces run `bin/seed actions_repos` before you get started within `/workspaces/github`
+# 1. Just copy this file in whole under `.github/workflows/`, give it a name, any name will do, I suggest `all-in-one.yml`
+# 2. (Optional) consider tweaking the default for `inputs.run_on` (I would have made it a `env` variable, but those can be used to set `run_on:`).  You can always can it at run time since it is a variable 
+# 3. The are some variables in the `env` section that you will need to tweak to match your instance
+#    1. `PACKAGE_PROTOCOL` set it to `http` or `https`
+#    2. `MAVEN_HOST_AND_PORT` for dotcom `maven.pkg.github.com` and `maven.pkg.github.localhost:3005` for a codespace
+#    3. `GHCR_HOST_AND_PORT` for dotcom `ghcr.io` and `github.localhost:8001` for a codespace 
+#    4. `RUBY_HOST_AND_PORT` for dotcom `rubygems.pkg.github.com`
+#    5. `NPM_HOST_AND_PORT` for dotcom `npm.pkg.github.com` and `github.localhost:8003` for a codespace
+#    6. `NUGET_HOST_AND_PORT` for dotcom `nuget.pkg.github.com` and `nuget.pkg.github.localhost:3005` for a codespace 
+# 4. Then goto the actions tab of your repo and manual kick of a run
+# 
+# Each run will create push a new version.
+#
+# Options
+#  1. You can pick which type of container to create, selecting all will kicking off one run for each type (note the "main" run does not wait for the others to finish)
+#  2. The packages that this creates will be owned by the owner of the repo, and will be named after the repo, you can assign a different name by providing one and/or selecting the options to prefix the name
+#  3. It can prefix all the packages with the container type.
+#  4. For docker you can select to insert an extra layer (not doing this will often just add a tag, and not a new version, to an existing container image) 
+#  5. It can download the newly updated version
+#  6. Delete the newly created version
+#  7. Restore the newly created/deleted version
+#  8. You can provide PAT to use in place of the GITHUB_TOKEN (I don't know if this is really safe for non-dev instances where you would like to keep your PAT private)
+#  9. And internal variables for effluence the number that goes into the version
+# 10. You can pick the run_on, but I think you will want to just get it this default set :)  
+#
+
+name: 📦Package📦 Stuff
+run-name: ${{ github.actor }} is testing out ${{ inputs.package_type }} 📦
+on:
+  workflow_dispatch:
+    inputs:
+      package_type:
+        description: 'type'
+        default: 'container'
+        type: choice
+        options:
+          - container
+          - npm
+          - maven
+          - rubygems
+          - nuget
+          - ALL
+      override_name:
+        description: 'name for the package, if not proved the repo name (for maven this will influence the Artifact Id)'
+        default: ""
+      add_type_prefix:
+        description: 'prefix name with type?'
+        type: boolean
+      force_new_layer:
+        description: 'add a new layer that will always need to be pushed (for container only)'
+        type: boolean
+      pull_after_upload:
+        description: 'pull the package after uploading'
+        type: boolean
+      delete:
+        description: 'Delete the version (or package if this is the only version)'
+        type: boolean
+      restore:
+        description: 'If delete is chosen, this will restore after the delete'
+        type: boolean        
+      pat:
+        description: 'pat to use, if not provided GITHUB_TOKEN will be used'
+        default: ""
+      now:
+        description: 'numeric value to create versions, if not provided $(date +%s) will be used'
+        default: ""
+      runs_on:
+        # default: "self-hosted"
+        default: "ubuntu-latest"
+
+env:
+  # PACKAGE_PROTOCOL: http
+  PACKAGE_PROTOCOL: https
+
+  # MAVEN_HOST_AND_PORT: maven.pkg.github.localhost:3005 
+  # MAVEN_HOST_AND_PORT: << SOMETHING FOR gheboot >>
+  # MAVEN_HOST_AND_PORT: << SOMETHING FOR BP-DEV >>
+  MAVEN_HOST_AND_PORT: maven.pkg.github.com
+
+  # GHCR_HOST_AND_PORT: github.localhost:8001
+  # GHCR_HOST_AND_PORT: containers.boxofyellow-0ab8737b8165fe6e8.ghe-test.com
+  # GHCR_HOST_AND_PORT: << SOMETHING FOR BP-DEV >>
+  GHCR_HOST_AND_PORT: ghcr.io
+
+  # RUBY_HOST_AND_PORT: rubygems.pkg.github.localhost:3005
+  # RUBY_HOST_AND_PORT: << SOMETHING FOR gheboot >>
+  # RUBY_HOST_AND_PORT: << SOMETHING FOR BP-DEV >>
+  RUBY_HOST_AND_PORT: rubygems.pkg.github.com
+
+  # NPM_HOST_AND_PORT: github.localhost:8003
+  # NPM_HOST_AND_PORT: << SOMETHING FOR gheboot >>
+  # NPM_HOST_AND_PORT: << SOMETHING FOR BP-DEV >>
+  NPM_HOST_AND_PORT: npm.pkg.github.com
+
+  # NUGET_HOST_AND_PORT: nuget.pkg.github.localhost:3005 
+  # NUGET_HOST_AND_PORT: << SOMETHING FOR gheboot >>
+  # NUGET_HOST_AND_PORT: << SOMETHING FOR BP-DEV >>
+  NUGET_HOST_AND_PORT: nuget.pkg.github.com
+
+  PACKAGE_NAMESPACE: ${{ github.repository_owner }}
+  PACKAGE_IDENTIFER: ${{ inputs.override_name || github.event.repository.name }}
+  PAT: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
+  NODE_AUTH_TOKEN: ${{ inputs.pat || secrets.GITHUB_TOKEN }}
+
+  MAVEN_GROUP_ID: com.testing.packages.app
+  MAVEN_CLASS_NAME: BestJavaAppEver
+
+  JAVA_VERSION: 1.8
+  NODE_VERSION: 20.x
+
+  # From https://maven.apache.org/download.cgi
+  MAVEN_DOWNLOAD_URL: https://dlcdn.apache.org/maven/maven-3/3.9.5/binaries/apache-maven-3.9.5-bin.tar.gz
+  MAVEN_INSTALL_DIR: /tmp/packages-maven
+
+  DOTNET_VERSION: 6.x
+
+# Need to do something about this... for now just set permission in the repo.
+#permissions:
+#  contents: read
+#  packages: write
+  
+jobs:
+  setup:
+    runs-on: ${{ inputs.runs_on }}
+    outputs:
+      package_name: ${{ steps.variables.outputs.package_name }}
+      package_full_name: ${{ steps.variables.outputs.package_full_name }}
+      now: ${{ steps.variables.outputs.now }}
+      version: ${{ steps.variables.outputs.version }}
+    steps:
+      - id: variables
+        name: variables
+        run: |
+          echo 'package_type: ${{ inputs.package_type }}'
+          echo 'override_name: ${{ inputs.override_name }}'
+          echo 'add_type_prefix: ${{ inputs.add_type_prefix }}'
+          echo 'force_new_layer: ${{ inputs.force_new_layer }}'
+          echo 'pull_after_upload: ${{ inputs.pull_after_upload }}'
+          echo 'delete: ${{ inputs.delete }}'
+          echo 'restore: ${{ inputs.restore }}'
+          echo 'pat (populated): ${{ inputs.pat != '' }}'
+          echo 'now: ${{ inputs.now }}'
+          echo 'runs_on: ${{ inputs.runs_on }}'
+          echo 'debug: ${{ runner.debug }}' 
+
+          package_name=""
+
+          if [ '${{ inputs.package_type }}' = 'maven' ] ; then
+            package_name='${{ env.MAVEN_GROUP_ID }}.'
+          fi
+
+          if [ '${{ inputs.add_type_prefix }}' = 'true' ] ; then
+            package_name="${package_name}${{ inputs.package_type }}-"
+          fi
+
+          package_name="${package_name}${{ env.PACKAGE_IDENTIFER }}"
+          echo "package_name: $package_name"
+          echo "package_name=$package_name" >> "$GITHUB_ENV"
+
+          package_full_name="${{ env.PACKAGE_NAMESPACE }}/$package_name"
+          echo "package_full_name: $package_full_name"
+          echo "package_full_name=$package_full_name" >> "$GITHUB_ENV"
+
+          now='${{ inputs.now }}'
+          if [ "$now" == "" ] ; then          
+            now="$(date +%s)"
+          fi
+          echo "now: $now"
+          echo "now=$now" >> "$GITHUB_ENV"
+
+          case '${{ inputs.package_type }}' in
+            container)
+              version="${{ env.GHCR_HOST_AND_PORT }}/$package_full_name:$now"
+              ;;
+
+            maven)
+              version="0.$now-SNAPSHOT"
+              ;;
+
+            npm|rubygems|nuget)
+              version="0.$now.0"
+              ;;
+
+            ALL)
+              version="Going to do them all now!"
+              ;;
+
+            *)
+              echo 'Unknown package_type: ${{ inputs.package_type }}'
+              exit 1
+              ;;
+          esac
+
+          echo "version: $version"
+          echo "version=$version" >> "$GITHUB_ENV"
+
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "package_full_name=$package_full_name" >> "$GITHUB_OUTPUT"
+          echo "now=$now" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: log github token and env
+        run: |
+          if [ '${{ runner.debug }}' = '1' ] ; then
+            echo $ENV_PASS | rev
+          fi
+
+          if [ "$ENV_PASS" = "$TOKEN" ] ; then
+            echo 'Using the GITHUB_TOKEN'
+          else
+            echo 'Using something else'
+          fi
+
+          echo "env"
+          env        
+        env:
+          ENV_PASS: ${{secrets.GITHUB_TOKEN}}
+          TOKEN: ${{ env.PAT }}          
+
+      - name: kick off off all
+        if: ${{ inputs.package_type == 'ALL' }}
+        run: |
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/repos/${{ env.PACKAGE_NAMESPACE }}/${{ github.event.repository.name }}/actions/runs/${{ github.run_id }}'
+          echo "url: $url"
+
+          run=$(curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url")
+          echo "run: $run"
+
+          workflow_id=$(echo "$run" | jq '.workflow_id')
+          echo "workflow_id: $workflow_id"
+
+          url="${{ github.api_url }}/repos/${{ env.PACKAGE_NAMESPACE }}/${{ github.event.repository.name }}/actions/workflows/$workflow_id/dispatches"
+          echo "url: $url"
+          echo "GITHUB_REF: ${{ github.ref }}"
+
+          for type in container npm maven rubygems nuget
+          do
+            body='{"ref":"${{ github.ref }}", "inputs":{
+              "package_type":"'"$type"'",
+              "override_name":"${{ inputs.override_name }}",
+              "add_type_prefix":"${{ inputs.add_type_prefix }}",
+              "force_new_layer":"${{ inputs.force_new_layer }}",
+              "pull_after_upload":"${{ inputs.pull_after_upload }}",
+              "delete":"${{ inputs.delete }}",
+              "restore":"${{ inputs.restore }}",
+              "pat":"${{ inputs.pat }}",
+              "now":"${{ env.now }}",
+              "runs_on":"${{ inputs.runs_on }}"
+            }}'
+            echo "body: $body"
+
+            curl -L \
+              --fail-with-body \
+              -POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$url" \
+              -d "$body"
+          done
+          
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  push-container:
+    runs-on: ${{ inputs.runs_on }}
+    needs: setup
+    if: ${{ inputs.package_type == 'container' }}
+    steps:
+      - name: create docker file
+        run: |
+          echo 'Deleting before we get started'
+          rm -f Dockerfile
+
+          echo 'Start filling it in'
+          touch Dockerfile
+          echo '# Basic nginx dockerfile starting with Ubuntu 20.04' >> Dockerfile
+          echo 'FROM ubuntu:20.04' >> Dockerfile
+          echo 'RUN apt-get -y update' >> Dockerfile
+          echo 'RUN apt-get -y install nginx' >> Dockerfile
+
+      - name: add layer that always changes
+        if: ${{ inputs.force_new_layer }}
+        run: |
+          echo 'version: ${{ needs.setup.outputs.version }}'
+          echo 'Creating Temp file, deleting first'
+          rm -f file.txt
+
+          echo 'Filling in Temp file'
+          echo "version: $version" >> file.txt
+
+          echo 'Temp file content'
+          cat file.txt
+
+          echo 'Adding to the Dockerfile'
+          echo 'ADD file.txt ./' >> Dockerfile
+
+      - run: cat Dockerfile
+
+      - run: echo $ENV_PASS | docker login ${{ env.GHCR_HOST_AND_PORT }} -u $ENV_USER --password-stdin
+        env:        
+          ENV_USER: ${{github.actor}}
+          ENV_PASS: ${{ env.PAT }}
+
+      - name: build
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'now: ${{ needs.setup.outputs.now }}'
+          echo 'build with now'
+          docker build . --file Dockerfile --tag '${{ needs.setup.outputs.package_name }}:${{ needs.setup.outputs.now }}'
+          echo 'version: ${{ needs.setup.outputs.version }}'
+          echo 'build with version'
+          docker build . --file Dockerfile --tag '${{ needs.setup.outputs.version }}'
+
+      - run: docker push '${{ needs.setup.outputs.version }}'
+
+      - run: docker logout ${{ env.GHCR_HOST_AND_PORT }}
+        if: ${{ always() }}
+
+  push-npm:
+    runs-on: ${{ inputs.runs_on }}
+    needs: setup
+    if: ${{ inputs.package_type == 'npm' }}
+    steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '${{ env.NODE_VERSION }}'
+          registry-url: '${{ env.PACKAGE_PROTOCOL }}://${{ env.NPM_HOST_AND_PORT }}'
+
+      - name: create files
+        run: |
+          echo "server_url: ${{ github.server_url }}"
+          echo "repository: ${{ github.repository }}"
+          echo 'package_full_name: ${{ needs.setup.outputs.package_full_name }}'
+          echo 'version: ${{ needs.setup.outputs.version }}'
+
+          echo 'Deleting before we get started'
+          rm -f .npmrc
+          rm -f main.js
+          rm -f package.json
+
+          echo 'Start filling it in'
+          touch .npmrc
+          touch main.js
+          touch package.json
+          
+          echo '@${{ env.PACKAGE_NAMESPACE }}:registry=${{ env.PACKAGE_PROTOCOL }}://${{ env.NPM_HOST_AND_PORT }}' >> .npmrc
+          echo '//${{ env.NPM_HOST_AND_PORT }}/:_authToken=${NODE_AUTH_TOKEN}' >> .npmrc
+
+          echo 'console.log("Hello world")' >> main.js
+
+          cat > package.json << EOM
+          {
+            "name": "@${{ needs.setup.outputs.package_full_name }}",
+            "version": "${{ needs.setup.outputs.version }}",
+            "description": "",
+            "main": "main.js",
+            "scripts": {
+              "start": "node main.js"
+            },
+            "publishConfig": {
+              "registry": "${{ env.PACKAGE_PROTOCOL }}://${{ env.NPM_HOST_AND_PORT }}"
+            },
+            "repository": {
+              "url": "${{ github.server_url }}/${{ github.repository }}"
+            },
+            "keywords": [],
+            "author": "",
+            "license": "ISC"
+          }
+          EOM
+
+      - name: show file content
+        run: |
+          echo .npmrc
+          cat .npmrc
+
+          echo main.js
+          cat main.js
+
+          echo package.json
+          cat package.json
+
+      - run: npm publish
+
+  push-maven:
+    runs-on: ${{ inputs.runs_on }}
+    outputs:
+      artifact_id: ${{ steps.variables.outputs.artifact_id }}
+      install_artifact_id: ${{ steps.variables.outputs.install_artifact_id }}
+      install_maven_class_name: ${{ steps.variables.outputs.install_maven_class_name }}
+    needs: setup
+    if: ${{ inputs.package_type == 'maven' }}
+    steps:
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v1
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: make sure mvn is installed
+        run: |
+          if mvn --version ; then
+            echo 'Found!'
+          else
+            echo 'Need Install'
+
+            install_dir="${{ env.MAVEN_INSTALL_DIR }}"
+            echo "install_dir: $install_dir"
+
+            if [ -d "$install_dir" ] ; then
+              echo "Found $install_dir"
+            else
+              echo "Download URL: ${{ env.MAVEN_DOWNLOAD_URL }}"
+              curl -o maven.tar.gz "${{ env.MAVEN_DOWNLOAD_URL }}"
+              mkdir -p "$install_dir"
+              tar -xvf maven.tar.gz -C "$install_dir"              
+            fi
+
+            top_dir=$(ls $install_dir)
+            echo "top_dir: $top_dir"
+            mvn_path="$install_dir/$top_dir/bin"
+            echo "$mvn_path: $mvn_path"
+
+            if [ -d "$mvn_path" ] ; then
+              echo 'maven path now exists'
+            else
+              echo "Ummm $mvn_path should be there, but it is not"
+              exit 1
+            fi
+
+            echo "$mvn_path" >> $GITHUB_PATH
+          fi
+
+      - run: mvn --version
+
+      - id: variables
+        name: variables
+        run: |
+          artifact_id=''
+          if [ '${{ inputs.add_type_prefix }}' = 'true' ] ; then
+            artifact_id='${{ inputs.package_type }}-'
+          fi
+          artifact_id="${artifact_id}${{ env.PACKAGE_IDENTIFER }}"
+          echo "artifact_id: $artifact_id"
+          
+          install_artifact_id="install.$artifact_id"
+          echo "install_artifact_id: $install_artifact_id"
+          
+          install_maven_class_name="Install${{ env.MAVEN_CLASS_NAME }}"
+          echo "install_maven_class_name: $install_maven_class_name"
+          
+          echo "artifact_id=$artifact_id" >> "$GITHUB_ENV"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+          echo "install_artifact_id=$install_artifact_id" >> "$GITHUB_ENV"
+          echo "install_artifact_id=$install_artifact_id" >> "$GITHUB_OUTPUT"
+
+          echo "install_maven_class_name=$install_maven_class_name" >> "$GITHUB_ENV"
+          echo "install_maven_class_name=$install_maven_class_name" >> "$GITHUB_OUTPUT"
+
+      - name: create files
+        run: |
+          source_path=src/main/java/$(echo ${{ env.MAVEN_GROUP_ID }} | tr . /)
+          echo "source_path: $source_path"
+          java_file="$source_path/${{ env.MAVEN_CLASS_NAME }}.java"
+          echo "java_file: $java_file"
+          
+          echo 'Deleting before we get started'
+          rm -f settings.xml
+          rm -f pom.xml
+          rm -rf "$source_path"
+          
+          echo 'Start filling it in'
+          touch settings.xml
+          touch pom.xml
+          mkdir -p "$source_path"
+          touch "$java_file"
+
+          cat > settings.xml << EOM
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                http://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <activeProfiles>
+              <activeProfile>github</activeProfile>
+            </activeProfiles>
+            <profiles>
+              <profile>
+                <id>github</id>
+                <repositories>
+                  <repository>
+                    <id>github</id>
+                    <url>${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }}/*</url>
+                  </repository>
+                </repositories>
+              </profile>
+            </profiles>
+            <servers>
+              <server>
+                <id>github</id>
+                <configuration>
+                  <httpHeaders>
+                    <property>
+                      <name>Authorization</name>
+                      <value>Bearer \${env.TOKEN}</value>
+                    </property>
+                  </httpHeaders>
+                </configuration>
+              </server>
+            </servers>
+          </settings>
+          EOM
+          
+          cat > pom.xml << EOM
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>${{ env.MAVEN_GROUP_ID }}</groupId>
+            <artifactId>${{ env.artifact_id }}</artifactId>
+            <version>${{ needs.setup.outputs.version }}</version>
+            <repositories>
+              <repository>
+                <id>github</id>
+                <url>${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }}/*</url>
+              </repository>
+            </repositories>
+          </project>
+          EOM
+
+          cat <<- END > "$java_file"
+          package ${{ env.MAVEN_GROUP_ID }};
+
+          public class ${{ env.MAVEN_CLASS_NAME }}
+          {
+              public static void main( String[] args )
+              {
+                  System.out.println( "Hello from ${{ env.PACKAGE_NAMESPACE}}'s ${{ needs.setup.outputs.package_name }}@${{ needs.setup.outputs.version }}, commit ${{ github.sha }}, run number ${{ github.run_number }}!" );
+              }
+          }
+          END
+
+      - name: show file content
+        run: |
+          source_path=src/main/java/$(echo ${{ env.MAVEN_GROUP_ID }} | tr . /)
+          echo "source_path: $source_path"
+
+          echo settings.xml
+          cat settings.xml
+
+          echo pom.xml
+          cat pom.xml
+
+          echo "$source_path/${{ env.MAVEN_CLASS_NAME }}.java"
+          cat "$source_path/${{ env.MAVEN_CLASS_NAME }}.java"
+
+      - run: mvn package --no-transfer-progress
+
+      - run: java -cp target/${{ env.artifact_id }}-${{ needs.setup.outputs.version }}.jar ${{ env.MAVEN_GROUP_ID }}.${{ env.MAVEN_CLASS_NAME }}
+
+      - run: mvn deploy --settings settings.xml -DaltDeploymentRepository=github::default::${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ github.repository }} --no-transfer-progress
+        env:
+          TOKEN: ${{ env.PAT }}
+
+  push-rubygems:
+    runs-on: ${{ inputs.runs_on }}
+    needs: setup
+    if: ${{ inputs.package_type == 'rubygems' }}
+    steps:
+      - run: ruby --version
+      - run: gem --version
+
+      - name: create files
+        run: |         
+          echo 'Deleting before we get started'
+          rm -rf lib
+          rm -f ${{ needs.setup.outputs.package_name }}.gemspec
+
+          mkdir lib
+          touch lib/${{ needs.setup.outputs.package_name }}.rb
+          touch ${{ needs.setup.outputs.package_name }}.gemspec
+          
+          cat > lib/${{ needs.setup.outputs.package_name }}.rb << EOM
+          class RubyGemsPublish
+            def self.hello
+              puts "Hello from ${{ github.repository }}!"
+            end
+          end
+          EOM
+          
+          cat > ${{ needs.setup.outputs.package_name }}.gemspec << EOM
+          Gem::Specification.new do |s|
+              s.name        = '${{ needs.setup.outputs.package_name }}'
+              s.version     = '${{ needs.setup.outputs.version }}'
+              s.files       = ["lib/${{ needs.setup.outputs.package_name }}.rb"]
+              s.metadata    = {
+                  "github_repo" => "${{ github.server_url }}/${{ github.repository }}"
+              }
+              s.summary     = "Best Summary Ever!"
+              s.authors     = ["Nobody Knows"]
+              s.licenses    = ['MIT']
+              s.homepage    = '${{ github.server_url }}/${{ github.repository }}'
+          end
+          EOM
+
+      - name: show files
+        run: |
+          echo lib/${{ needs.setup.outputs.package_name }}.rb
+          cat lib/${{ needs.setup.outputs.package_name }}.rb
+
+          echo ${{ needs.setup.outputs.package_name }}.gemspec
+          cat ${{ needs.setup.outputs.package_name }}.gemspec
+
+      - run: gem build ${{ needs.setup.outputs.package_name }}.gemspec
+
+      - run: gem push --host ${{ env.PACKAGE_PROTOCOL }}://${{ env.RUBY_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }} '${{ needs.setup.outputs.package_name }}-${{ needs.setup.outputs.version }}.gem'
+        env:
+          GEM_HOST_API_KEY: "Bearer ${{ env.PAT }}"
+
+  push-nuget:
+    runs-on: ${{ inputs.runs_on }}
+    outputs:
+      nuget_source: ${{ steps.setup.outputs.nuget_source }}
+    needs: setup
+    if: ${{ inputs.package_type == 'nuget' }}
+    steps:
+      - uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - run: dotnet --version
+      - run: dotnet nuget --version
+
+      - name: setup new project directory
+        id: setup
+        run: |
+          directory='${{ needs.setup.outputs.package_name }}'
+          echo "directory: $directory"
+          echo "directory=$directory" >> "$GITHUB_ENV"
+          rm -rf "$directory"
+          mkdir "$directory"
+
+          nuget_source='${{ env.PACKAGE_PROTOCOL }}://${{ env.NUGET_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }}/index.json'
+          echo "nuget_source=$nuget_source" >> "$GITHUB_ENV"
+          echo "nuget_source=$nuget_source" >> "$GITHUB_OUTPUT"          
+
+      - run: dotnet new classlib
+        working-directory: ${{ env.directory }}
+
+      - run: echo 'public class NuGetPublish { public static void SayHello() { System.Console.WriteLine("Hello from ${{ github.repository }}!"); } }' > NuGetPublish.cs
+        working-directory: ${{ env.directory }}
+
+      - run: dotnet pack -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }} -p:PackageVersion=${{ needs.setup.outputs.version }} --output .
+        working-directory: ${{ env.directory }}
+
+      - run: ls *.nupkg
+        working-directory: ${{ env.directory }}
+
+      - run: dotnet nuget push *.nupkg --api-key "$TOKEN" --source ${{ env.nuget_source }}
+        working-directory: ${{ env.directory }}
+        env:
+          TOKEN: ${{ env.PAT }}
+
+  get-package-data:
+    runs-on: ${{ inputs.runs_on }}
+    outputs:
+      owner_type: ${{ steps.get-owner-type.outputs.owner_type }}
+      version_id: ${{ steps.get-version-id.outputs.version_id }}
+      number_of_versions: ${{ steps.get-version-id.outputs.number_of_versions }}
+    needs: [setup, push-container, push-npm, push-maven, push-rubygems, push-nuget]
+    if: |
+      always() && inputs.package_type != 'ALL' &&
+      needs.setup.result == 'success' &&
+      needs.push-container.result != 'failure' && 
+      needs.push-npm.result != 'failure' &&
+      needs.push-maven.result != 'failure' &&
+      needs.push-rubygems.result != 'failure' &&
+      needs.push-nuget.result != 'failure'
+    steps:
+      - id: get-owner-type
+        name: get-owner-type
+        run: |
+          echo "api_url: ${{ github.api_url }}"
+          url="${{ github.api_url }}/repos/${{ env.PACKAGE_NAMESPACE }}/${{ github.event.repository.name }}"
+          echo "url: $url"
+
+          repo=$(curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url")
+          echo "repo: $repo"
+
+          owner_type_raw=$(echo "$repo" | jq '.owner.type')
+          echo "owner_type_raw: $owner_type_raw"
+
+          case "$owner_type_raw" in          
+            '"User"')
+              owner_type=users
+              ;;
+
+            '"Organization"')
+              owner_type=orgs
+              ;;
+          
+            *)
+              echo "Unknown owner_type_raw: $owner_type_raw"
+              exit 1
+              ;;
+          esac
+
+          echo "owner_type: $owner_type"
+          echo "owner_type=$owner_type" >> "$GITHUB_ENV"
+          echo "owner_type=$owner_type" >> "$GITHUB_OUTPUT"
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: get-version-id
+        name: get-version-id
+        run: |
+          echo 'now: ${{ needs.setup.outputs.now }}'
+          echo 'version: ${{ needs.setup.outputs.version }}'
+          echo 'owner_type: ${{ env.owner_type }}'
+
+          temp_file=$(mktemp)
+          echo "temp_file: $temp_file"
+          echo "temp_file=$temp_file" >> "$GITHUB_ENV"
+                  
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/${{ env.owner_type }}/${{ env.PACKAGE_NAMESPACE }}/packages/${{ inputs.package_type }}/${{ needs.setup.outputs.package_name }}/versions'
+          echo "url: $url"
+
+          i=0
+          while true
+          do
+            i=$((i+1))
+          
+            http_code=$(curl -L \
+              --silent \
+              --output "$temp_file" \
+              --write-out "%{http_code}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$url")
+
+            echo "($i) http_code: $http_code"
+
+            if [[ ${http_code} -ge 200 && ${http_code} -lt 400 ]] ; then
+              break;
+            fi
+
+            echo "($i) result"
+            cat "$temp_file"
+
+            if [[ ${i} -ge 30 ]] ; then
+              echo "Failed to find package!"
+              exit 1
+            fi
+            
+            sleep 1
+
+          done
+
+          versions=$(cat "$temp_file")
+          echo "versions: $versions"
+
+          if [ '${{ inputs.package_type }}' = 'container' ] ; then
+            version_id=$(echo "$versions" | jq '.[] | select(.metadata.container.tags | any(index("${{ needs.setup.outputs.now }}"))).id')
+          else
+            version_id=$(echo "$versions" | jq '.[] | select(.name=="${{ needs.setup.outputs.version }}").id')
+          fi
+          echo "version_id: $version_id"
+          
+          number_of_versions=$(echo "$versions" | jq '. | length')
+          echo "number_of_versions: $number_of_versions"
+
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+          echo "number_of_versions=$number_of_versions" >> "$GITHUB_OUTPUT"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: cleanup temp file
+        if: always()
+        run: |
+          temp_file="${{ env.temp_file }}"
+          echo "temp_file: $temp_file"
+          if [ -n "$temp_file" ] ; then
+            echo "Deleting $temp_file"
+            rm "$temp_file"
+          fi
+
+  pull-container:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, get-package-data]
+    if: ${{ always() && needs.get-package-data.result == 'success' && inputs.pull_after_upload && inputs.package_type == 'container' }}
+    steps:
+      - name: remove this images so we can download it next
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'package_full_name: ${{ needs.setup.outputs.package_full_name }}'
+          echo 'now: ${{ needs.setup.outputs.now }}'
+          echo 'version: ${{ needs.setup.outputs.version }}'
+          echo 'debug: ${{ runner.debug }}'
+
+          if [ '${{ runner.debug }}' = '1' ] ; then
+            echo 'start'
+            docker system df
+            docker images
+          fi
+
+          for tag_to_search in '${{ needs.setup.outputs.package_name }}' '${{ env.GHCR_HOST_AND_PORT }}/${{ needs.setup.outputs.package_full_name }}'
+          do
+            echo "looking for $tag_to_search"
+            images=$(docker images "$tag_to_search" -a -q)
+            if [ -n "$images" ] ; then
+              echo "images: $images"
+              docker rmi -f "$images"
+            fi            
+          done
+
+          echo "docker builder prune"
+          docker builder prune -f
+
+          if [ '${{ runner.debug }}' = '1' ] ; then
+            echo 'end'
+            docker system df
+            docker images
+          fi
+
+      - run: echo $ENV_PASS | docker login ${{ env.GHCR_HOST_AND_PORT }} -u $ENV_USER --password-stdin
+        env:        
+          ENV_USER: ${{github.actor}}
+          ENV_PASS: ${{ env.PAT }}
+                    
+      - name: pull
+        run: |
+          echo 'version: ${{ needs.setup.outputs.version }}'
+
+          if [ '${{ runner.debug }}' = '1' ] ; then
+            echo 'start'
+            docker system df
+            docker images
+          fi
+
+          echo 'pulling!'
+          docker image pull '${{ needs.setup.outputs.version }}'
+
+          if [ '${{ runner.debug }}' = '1' ] ; then
+            echo 'end'
+            docker system df
+            docker images
+          fi
+
+      - run: docker logout ${{ env.GHCR_HOST_AND_PORT }}
+        if: ${{ always() }}
+
+  pull-npm:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, get-package-data]
+    if: ${{ always() && needs.get-package-data.result == 'success' && inputs.pull_after_upload && inputs.package_type == 'npm' }}
+    steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '${{ env.NODE_VERSION }}'
+          registry-url: '${{ env.PACKAGE_PROTOCOL }}://${{ env.NPM_HOST_AND_PORT }}'
+    
+      - run: npm install "@${{ needs.setup.outputs.package_full_name }}@${{ needs.setup.outputs.version }}"
+
+  pull-maven:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, push-maven, get-package-data]
+    if: ${{ always() && needs.get-package-data.result == 'success' && inputs.pull_after_upload && inputs.package_type == 'maven' }}
+    steps:
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v1
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: make sure mvn is installed
+        run: |
+          if mvn --version ; then
+            echo 'Found!'
+          else
+            echo 'Need Install'
+
+            install_dir="${{ env.MAVEN_INSTALL_DIR }}"
+            echo "install_dir: $install_dir"
+
+            #
+            # The download already happened.  hosted runnrs don't need this, only self hosted do
+            # If you have exactly one self hosted runner then the install happend during the pull
+            # But we also need to get this into the path
+            #
+
+            top_dir=$(ls $install_dir)
+            echo "top_dir: $top_dir"
+            mvn_path="$install_dir/$top_dir/bin"
+            echo "$mvn_path: $mvn_path"
+
+            if [ -d "$mvn_path" ] ; then
+              echo 'maven path now exists'
+            else
+              echo "Ummm $mvn_path should be there, but it is not"
+              exit 1
+            fi
+
+            echo "$mvn_path" >> $GITHUB_PATH
+          fi
+
+      - run: mvn --version
+      
+      - name: Creating a new application to download
+        run: |
+          source_path=src/main/java/$(echo ${{ env.MAVEN_GROUP_ID }} | tr . /)
+          echo "source_path: $source_path"
+
+          java_file="$source_path/${{ needs.push-maven.outputs.install_maven_class_name }}.java"
+          echo "java_file: $java_file"
+
+          echo 'Deleting before we get started'
+          rm -f settings.xml
+          rm -f pom.xml
+          rm -rf "$source_path"
+          
+          echo 'Start filling it in'
+          touch settings.xml
+          touch pom.xml
+          mkdir -p "$source_path"
+          touch "$java_file"
+
+          # Note the part with the mirrors is from https://stackoverflow.com/questions/67001968/how-to-disable-maven-blocking-external-http-repositories
+          cat > settings.xml << EOM
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                http://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <activeProfiles>
+              <activeProfile>github</activeProfile>
+            </activeProfiles>
+            <profiles>
+              <profile>
+                <id>github</id>
+                <repositories>
+                  <repository>
+                    <id>github</id>
+                    <url>${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ github.repository }}</url>
+                  </repository>
+                </repositories>
+              </profile>
+            </profiles>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>token</username>
+                <password>\${env.TOKEN}</password>
+              </server>
+              <server>
+                <id>github-http-unblocker</id>
+                <username>token</username>
+                <password>\${env.TOKEN}</password>
+              </server>
+            </servers>
+            <mirrors>
+              <mirror>
+                <id>github-http-unblocker</id>
+                <mirrorOf>github</mirrorOf>
+                <name></name>
+                <url>${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ github.repository }}</url>
+              </mirror>
+            </mirrors>
+          </settings>
+          EOM
+
+          cat > pom.xml << EOM
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>${{ env.MAVEN_GROUP_ID }}</groupId>
+            <artifactId>${{ needs.push-maven.outputs.install_artifact_id }}</artifactId>
+            <version>${{ needs.setup.outputs.version }}</version>
+            <dependencies>
+              <dependency>
+                <groupId>${{ env.MAVEN_GROUP_ID }}</groupId>
+                <artifactId>${{ needs.push-maven.outputs.artifact_id }}</artifactId>
+                <version>${{ needs.setup.outputs.version }}</version>
+              </dependency>
+            </dependencies>
+            <repositories>
+              <repository>
+                <id>github</id>
+                <url>${{ env.PACKAGE_PROTOCOL }}://${{ env.MAVEN_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }}</url>
+              </repository>
+            </repositories>
+          </project>
+          EOM
+
+          cat <<- END > "$java_file"
+          package ${{ env.MAVEN_GROUP_ID }};
+
+          import ${{ env.MAVEN_GROUP_ID }}.${{ env.MAVEN_CLASS_NAME }};
+
+          public class ${{ needs.push-maven.outputs.install_maven_class_name }}
+          {
+              public static void main( String[] args )
+              {
+                  System.out.println( "Hello from Install!" );
+                  ${{ env.MAVEN_CLASS_NAME }}.main( args );
+                  System.out.println( "Good Bye from Install!" );
+              }
+          }
+          END
+
+          echo settings.xml
+          cat settings.xml
+
+          echo pom.xml
+          cat pom.xml
+
+          echo "$java_file"
+          cat "$java_file"
+
+      - run: mvn dependency:purge-local-repository -DmanualInclude="${{ env.MAVEN_GROUP_ID }}:${{ needs.push-maven.outputs.artifact_id }}"
+      
+      - run: mvn install -U --settings settings.xml --no-transfer-progress
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - run: mvn exec:java -D exec.mainClass=${{ env.MAVEN_GROUP_ID }}.${{ needs.push-maven.outputs.install_maven_class_name }} --no-transfer-progress
+
+  pull-rubygems:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, get-package-data]
+    if: ${{ always() && needs.get-package-data.result == 'success' && inputs.pull_after_upload && inputs.package_type == 'rubygems' }}
+    steps:
+      - name: create script to use the new package
+        run: |          
+          echo 'Deleting before we get started'
+          rm -rf lib
+          rm -f ${{ needs.setup.outputs.package_name }}.gemspec
+          rm -f *.gem
+          rm -f main.rb
+
+          touch main.rb
+          cat > main.rb << EOM
+          require '${{ needs.setup.outputs.package_name }}'
+          RubyGemsPublish.hello
+          EOM
+
+      - run: sudo gem uninstall "${{ needs.setup.outputs.package_name }}"
+        
+      - run: sudo gem install "${{ needs.setup.outputs.package_name }}" --version "${{ needs.setup.outputs.version }}" --source "${{ env.PACKAGE_PROTOCOL }}://dummy:$TOKEN@${{ env.RUBY_HOST_AND_PORT }}/${{ env.PACKAGE_NAMESPACE }}" --ignore-dependencies
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - run: ruby main.rb
+
+  pull-nuget:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, get-package-data, push-nuget]
+    if: ${{ always() && needs.get-package-data.result == 'success' && inputs.pull_after_upload && inputs.package_type == 'nuget' }}
+    steps:
+      - uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - run: dotnet --version
+      - run: dotnet nuget --version
+      - run: dotnet nuget locals all --clear
+
+      - name: setup new project directory
+        run: |
+          directory='pull-${{ needs.setup.outputs.package_name }}'
+          echo "directory: $directory"
+          echo "directory=$directory" >> "$GITHUB_ENV"
+          rm -rf "$directory"
+          mkdir "$directory"
+
+          echo 'source: ${{ needs.push-nuget.outputs.nuget_source }}'
+
+      - run: dotnet new console
+        working-directory: ${{ env.directory }}
+
+      - run: echo 'class Program { static void Main() { NuGetPublish.SayHello(); } }' > Program.cs
+        working-directory: ${{ env.directory }}
+
+      - name: Add nuget.config
+        run: |
+             cat > nuget.config << EOM
+             <?xml version="1.0" encoding="utf-8"?>
+             <configuration>
+               <packageSources>
+                 <clear />
+                 <add key="github" value="${{ needs.push-nuget.outputs.nuget_source }}" />
+               </packageSources>
+               <packageSourceCredentials>
+                 <github>
+                   <add key="Username" value="token" />
+                   <add key="ClearTextPassword" value="%TOKEN%" />
+                 </github>
+               </packageSourceCredentials>
+             </configuration>
+             EOM
+
+             cat nuget.config
+        working-directory: ${{ env.directory }}
+
+      - run: dotnet add package '${{ needs.setup.outputs.package_name }}' --version '${{ needs.setup.outputs.version }}' --source '${{ needs.push-nuget.outputs.nuget_source }}'
+        working-directory: ${{ env.directory }}
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - run: cat '${{ env.directory }}.csproj'
+        working-directory: ${{ env.directory }}
+
+      - run: dotnet run
+        working-directory: ${{ env.directory }}
+        env:
+          TOKEN: ${{ env.PAT }}
+
+  delete:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [setup, get-package-data, pull-container, pull-npm, pull-maven, pull-rubygems, pull-nuget]
+    if: |
+      always() && inputs.delete && inputs.package_type != 'ALL' &&
+      needs.get-package-data.result == 'success' &&
+      needs.pull-container.result != 'failure' && 
+      needs.pull-npm.result != 'failure' &&
+      needs.pull-maven.result != 'failure' &&
+      needs.pull-rubygems.result != 'failure' &&
+      needs.pull-nuget.result != 'failure'
+    steps:
+      - name: log
+        run: |
+          echo 'owner_type: ${{ needs.get-package-data.outputs.owner_type }}'
+          echo 'version_id: ${{ needs.get-package-data.outputs.version_id }}'
+          echo 'number_of_versions: ${{ needs.get-package-data.outputs.number_of_versions }}'
+        
+      - name: delete version
+        if: ${{ needs.get-package-data.outputs.number_of_versions > 1 }}
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'version_id: ${{ needs.get-package-data.outputs.version_id }}'
+          echo 'owner_type: ${{ needs.get-package-data.outputs.owner_type }}'
+
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/${{ needs.get-package-data.outputs.owner_type }}/${{ env.PACKAGE_NAMESPACE }}/packages/${{ inputs.package_type }}/${{ needs.setup.outputs.package_name }}/versions/${{ needs.get-package-data.outputs.version_id }}'
+          echo "url: $url"
+
+          curl -L -v \
+            --fail-with-body \
+            -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: restore version
+        if: ${{ inputs.restore && (needs.get-package-data.outputs.number_of_versions > 1) }}
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'version_id: ${{ needs.get-package-data.outputs.version_id }}'
+          echo 'owner_type: ${{ needs.get-package-data.outputs.owner_type }}'
+
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/${{ needs.get-package-data.outputs.owner_type }}/${{ env.PACKAGE_NAMESPACE }}/packages/${{ inputs.package_type }}/${{ needs.setup.outputs.package_name }}/versions/${{ needs.get-package-data.outputs.version_id }}/restore'
+          echo "url: $url"
+
+          curl -L -v \
+            --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: delete package
+        if: ${{ needs.get-package-data.outputs.number_of_versions == 1 }}
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'owner_type: ${{ needs.get-package-data.outputs.owner_type }}'
+
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/${{ needs.get-package-data.outputs.owner_type }}/${{ env.PACKAGE_NAMESPACE }}/packages/${{ inputs.package_type }}/${{ needs.setup.outputs.package_name }}'
+          echo "url: $url"
+          
+          curl -L -v \
+            --fail-with-body \
+            -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+
+      - name: restore package
+        if: ${{ inputs.restore && (needs.get-package-data.outputs.number_of_versions == 1) }}
+        run: |
+          echo 'package_name: ${{ needs.setup.outputs.package_name }}'
+          echo 'owner_type: ${{ needs.get-package-data.outputs.owner_type }}'
+
+          echo "api_url: ${{ github.api_url }}"
+          url='${{ github.api_url }}/${{ needs.get-package-data.outputs.owner_type }}/${{ env.PACKAGE_NAMESPACE }}/packages/${{ inputs.package_type }}/${{ needs.setup.outputs.package_name }}/restore'
+          echo "url: $url"
+          
+          curl -L -v \
+            --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+        env:
+          TOKEN: ${{ env.PAT }}
+  
